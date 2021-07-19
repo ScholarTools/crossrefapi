@@ -4,16 +4,16 @@ Crossref API Client
 
 Library with functions to iterate through the Crossref API.
 
-.. image:: https://travis-ci.org/fabiobatalha/crossrefapi.svg?branch=master
-    :target: https://travis-ci.org/fabiobatalha/crossrefapi
+This is a fork of https://github.com/fabiobatalha/crossrefapi
+
+Changes are described `here <docs/forked_changes.md>`_
+
 
 --------------
 How to Install
 --------------
 
-.. code-block:: shell
-
-  pip install crossrefapi
+Currently requires git cloning
 
 ----------
 How to Use

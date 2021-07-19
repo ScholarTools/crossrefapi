@@ -1,13 +1,25 @@
 # coding: utf-8
 
-import requests
-import json
+#Standard
+#------------------------
 from time import sleep
 
-from datetime import datetime, timedelta
 
-from crossref import validators, VERSION
+#Third
+#--------------------------
+import requests
 
+#Local
+#-----------------------------
+from . import validators, VERSION
+from . import utils
+fstr = utils.float_or_none_to_string
+cld = utils.get_list_class_display
+from .utils import get_truncated_display_string as td
+from .utils import quotes
+
+#Constants and Defaults
+#--------------------------------
 LIMIT = 100
 MAXOFFSET = 10000
 FACETS_MAX_LIMIT = 1000
@@ -29,10 +41,25 @@ class UrlSyntaxError(CrossrefAPIError, ValueError):
 
 class HTTPRequest(object):
 
+    #??? This doesn't appear to be used
     THROTTLING_TUNNING_TIME = 600
 
     def __init__(self, throttle=True):
+        """
+        
+
+        Parameters
+        ----------
+        throttle : default True
+            ??? How is this implemented?
+
+        Returns
+        -------
+        None.
+
+        """
         self.throttle = throttle
+        #This is a guess that impacts the default throttling time
         self.rate_limits = {
             'X-Rate-Limit-Limit': 50,
             'X-Rate-Limit-Interval': 1
@@ -40,7 +67,8 @@ class HTTPRequest(object):
 
     def _update_rate_limits(self, headers):
 
-        self.rate_limits['X-Rate-Limit-Limit'] = int(headers.get('X-Rate-Limit-Limit', 50))
+        self.rate_limits['X-Rate-Limit-Limit'] = \
+            int(headers.get('X-Rate-Limit-Limit', 50))
 
         interval_value = int(headers.get('X-Rate-Limit-Interval', '1s')[:-1])
         interval_scope = headers.get('X-Rate-Limit-Interval', '1s')[-1]
@@ -57,7 +85,9 @@ class HTTPRequest(object):
     def throttling_time(self):
         return self.rate_limits['X-Rate-Limit-Interval'] / self.rate_limits['X-Rate-Limit-Limit']
 
-    def do_http_request(self, method, endpoint, data=None, files=None, timeout=100, only_headers=False, custom_header=None):
+    def do_http_request(self, method, endpoint, data=None, 
+                        files=None, timeout=100, only_headers=False, 
+                        custom_header=None):
 
         if only_headers is True:
             return requests.head(endpoint)
@@ -71,10 +101,13 @@ class HTTPRequest(object):
             headers = custom_header
         else:
             headers = {'user-agent': str(Etiquette())}
+            
         if method == 'post':
-            result = action(endpoint, data=data, files=files, timeout=timeout, headers=headers)
+            result = action(endpoint, data=data, files=files, timeout=timeout, 
+                            headers=headers)
         else:
-            result = action(endpoint, params=data, timeout=timeout, headers=headers)
+            result = action(endpoint, params=data, timeout=timeout, 
+                            headers=headers)
 
         if self.throttle is True:
             self._update_rate_limits(result.headers)
@@ -84,6 +117,23 @@ class HTTPRequest(object):
 
 
 def build_url_endpoint(endpoint, context=None):
+    """
+    
+    Helper method to build url
+    
+    Parameters
+    ----------
+    endpoint : string
+        API endpoint without query params
+    context : string, default None
+        a prefix to the endpoint, see funders
+
+    Returns
+    -------
+    TYPE
+        DESCRIPTION.
+
+    """
 
     endpoint = '/'.join([i for i in [context, endpoint] if i])
 
@@ -92,7 +142,18 @@ def build_url_endpoint(endpoint, context=None):
 
 class Etiquette:
 
-    def __init__(self, application_name='undefined', application_version='undefined', application_url='undefined', contact_email='anonymous'):
+    def __init__(self, 
+                 application_name='undefined', 
+                 application_version='undefined', 
+                 application_url='undefined', 
+                 contact_email='anonymous'):
+        """
+        etiquette = Etiquette(app_name,app_version,app_url,email)
+        w = Works(etiquette=etiquette)
+        
+        """
+        
+        
         self.application_name = application_name
         self.application_version = application_version
         self.application_url = application_url
@@ -111,23 +172,86 @@ class Etiquette:
 
 class Endpoint:
 
+    #This varies by class type
     CURSOR_AS_ITER_METHOD = False
+    
+    """
+    
+    Attributes
+    ----------
+    context : string
+        This seems to be used for getting works for specific funders. 
+        e.g. /funders/{id}/works   => context = '%s/%s' % (self.ENDPOINT, str(funder_id))
+    custom_header
+    crossref_plus_token : string
+        Plus token allows better performance (for a price)
+    do_http_request : method
+        This is the 'do_http_request' method of HTTPRequest
+    etiquette : Etiquette
+    request_params
+    timeout    
+    version
+    
+    
+    """
 
-    def __init__(self, request_url=None, request_params=None, context=None, etiquette=None, throttle=True, crossref_plus_token=None, timeout=30):
-        self.do_http_request = HTTPRequest(throttle=throttle).do_http_request
+    def __init__(self, 
+                 request_url=None, 
+                 request_params=None, 
+                 context=None, 
+                 etiquette=None, 
+                 throttle=True, 
+                 crossref_plus_token=None, 
+                 timeout=30):
+                
+        self.context = context or ''
+        self.crossref_plus_token = crossref_plus_token
         self.etiquette = etiquette or Etiquette()
         self.custom_header = {'user-agent': str(self.etiquette)}
-        self.crossref_plus_token = crossref_plus_token
         if crossref_plus_token:
             self.custom_header["Crossref-Plus-API-Token"] = self.crossref_plus_token
-        self.request_url = request_url or build_url_endpoint(self.ENDPOINT, context)
+        
+        #Note
+        self.do_http_request = HTTPRequest(throttle=throttle).do_http_request
+        
         self.request_params = request_params or dict()
-        self.context = context or ''
+        self.request_url = request_url or build_url_endpoint(self.ENDPOINT, context)
         self.timeout = timeout
+        self._version = None
+       
+    @classmethod    
+    def _create_copy(cls,old,request_url,request_params):
+        
+        
+        #Select
+        #return self.__class__(request_url=request_url, request_params=request_params, 
+        #context=context, etiquette=self.etiquette, timeout=self.timeout)
+
+        self = cls.__new__(cls)
+        self.context = old.context
+        self.crossref_plus_token = old.crossref_plus_token
+        self.etiquette = old.etiquette
+        self.custom_header = old.custom_header
+        self.do_http_request = old.do_http_request
+        self.request_params = request_params
+        self.request_url = request_url
+        self.timeout = old.timeout
+        self._version = old._version
+        
+        return self
 
     @property
     def _rate_limits(self):
-        request_params = dict(self.request_params)
+        """
+        
+
+        Returns
+        -------
+        rate_limits : dict
+            DESCRIPTION.
+
+        """
+        #request_params = dict(self.request_params)
         request_url = str(self.request_url)
 
         result = self.do_http_request(
@@ -146,11 +270,28 @@ class Endpoint:
 
         return rate_limits
 
-    def _escaped_pagging(self):
-        escape_pagging = ['offset', 'rows']
+    def _remove_paging_params(self):
+        """
+        
+        Removes offset and rows from .request_params and returns the remaining
+        request parameters as a dictionary. 
+        
+        Returns
+        -------
+        request_params : dict
+            DESCRIPTION.
+
+        """
+        
+        #These are removed from the dictionary
+        paging_params = ['offset', 'rows']
+        
+        #rows - # of results per page
+        #offset - # of results to skip before returning results
+        
         request_params = dict(self.request_params)
 
-        for item in escape_pagging:
+        for item in paging_params:
             try:
                 del(request_params[item])
             except KeyError:
@@ -166,18 +307,22 @@ class Endpoint:
             >>> Works().version
             '1.0.0'
         """
-        request_params = dict(self.request_params)
-        request_url = str(self.request_url)
+        
+        if self._version is None: 
+            request_params = dict(self.request_params)
+            request_url = str(self.request_url)
+    
+            result = self.do_http_request(
+                'get',
+                request_url,
+                data=request_params,
+                custom_header=self.custom_header,
+                timeout=self.timeout
+            ).json()
 
-        result = self.do_http_request(
-            'get',
-            request_url,
-            data=request_params,
-            custom_header=self.custom_header,
-            timeout=self.timeout
-        ).json()
-
-        return result['message-version']
+            self._version =  result['message-version']
+            
+        return self._version
 
     @property
     def x_rate_limit_limit(self):
@@ -206,6 +351,13 @@ class Endpoint:
             14
             >>> Works().query('zika').filter(prefix='10.1590').sort('published').order('desc').filter(has_abstract='true').query(author='Marli').count()
             1
+        
+        Improvements
+        ------------
+        1) This request only returns the count. Do we expose the 
+        raw message itself?
+        
+        
         """
         request_params = dict(self.request_params)
         request_url = str(self.request_url)
@@ -241,7 +393,9 @@ class Endpoint:
             >>> Works().query('zika').filter(prefix='10.1590').sort('published').order('desc').filter(has_abstract='true').query(author='Marli').url
             'https://api.crossref.org/works?sort=published&filter=prefix%3A10.1590%2Chas-abstract%3Atrue&query=zika&order=desc&query.author=Marli'
         """
-        request_params = self._escaped_pagging()
+        
+        #TODO: This is an assumption ... - I would think we would want it
+        request_params = self._remove_paging_params()
 
         sorted_request_params = sorted([(k, v) for k, v in request_params.items()])
         req = requests.Request(
@@ -250,17 +404,76 @@ class Endpoint:
         return req.url
 
     def all(self):
+        """
+        Defaults back to endpoint without parameters.
+        
+        This could almost be called reset_endpoint() or clear_endpoint().
+        
+        But why the iter cast?
+
+        Returns
+        -------
+        iterator
+            DESCRIPTION.
+
+        """
         context = str(self.context)
         request_url = build_url_endpoint(self.ENDPOINT, context)
         request_params = {}
+        
+        return iter(self._create_copy(self,request_url,request_params))
 
-        return iter(self.__class__(request_url=request_url, request_params=request_params, context=context, etiquette=self.etiquette, crossref_plus_token=self.crossref_plus_token, timeout=self.timeout))
+    
+    def get(self):
+        """
+        
+        THis can be used to get the raw response from the server. 
 
+        Raises
+        ------
+        StopIteration
+            DESCRIPTION.
+
+        Returns
+        -------
+        json
+            Response from the server. Contains fields:
+                .status
+                .message_type
+                .message_version
+                .message
+                    .facets
+                    .total-results
+                    .items
+                    .items-per_page
+                    .query
+            
+        Improvements
+        ------------
+        1) Support returning an object that returns the data and facilitates
+        getting more data
+        
+        
+
+        """
+        result = self.do_http_request(
+                'get',
+                self.request_url,
+                data=self.request_params,
+                custom_header=self.custom_header,
+                timeout=self.timeout
+            )
+
+        if result.status_code == 404:
+            raise StopIteration()
+
+        return result.json()
+    
     def __iter__(self):
         request_url = str(self.request_url)
 
         if 'sample' in self.request_params:
-            request_params = self._escaped_pagging()
+            request_params = self._remove_paging_params()
             result = self.do_http_request(
                 'get',
                 self.request_url,
@@ -281,8 +494,10 @@ class Endpoint:
 
         if self.CURSOR_AS_ITER_METHOD is True:
             request_params = dict(self.request_params)
+            #* is for deep paging, more than 10000 results
             request_params['cursor'] = '*'
-            request_params['rows'] = LIMIT
+            if 'rows' not in request_params:
+                request_params['rows'] = LIMIT
             while True:
                 result = self.do_http_request(
                     'get',
@@ -305,9 +520,14 @@ class Endpoint:
 
                 request_params['cursor'] = result['message']['next-cursor']
         else:
+            #Relevant Endpoints 
+            #--------------------------------
+            #
             request_params = dict(self.request_params)
-            request_params['offset'] = 0
-            request_params['rows'] = LIMIT
+            if 'offset' not in request_params:
+                request_params['offset'] = 0
+            if 'rows' not in request_params:
+                request_params['rows'] = LIMIT
             while True:
                 result = self.do_http_request(
                     'get',
@@ -335,9 +555,65 @@ class Endpoint:
                         'Offset exceded the max offset of %d',
                         MAXOFFSET
                     )
+                    
+    def display_endpoint(self):
+        """
+        
+            context : string
+        This seems to be used for getting works for specific funders. 
+        e.g. /funders/{id}/works   => context = '%s/%s' % (self.ENDPOINT, str(funder_id))
+    custom_header
+    crossref_plus_token : string
+        Plus token allows better performance (for a price)
+    do_http_request : method
+        This is the 'do_http_request' method of HTTPRequest
+    etiquette : Etiquette
+    request_params
+    timeout    
+    version
+
+        Returns
+        -------
+        TYPE
+            DESCRIPTION.
+
+        """
+        
+        if self._version is not None:
+            version_string = self._version
+        else:
+            version_string = '<not yet evaluated>'
+        
+        pv = ['context',quotes(self.context),
+              'custom_header',td(str(self.custom_header)),
+              'crossref_plus_token',self.crossref_plus_token,
+              'etiquette',cld(self.etiquette),
+              'request_params',td(str(self.request_params)),
+              'timeout',self.timeout,
+              'url','<not evaluated>',
+              'version',version_string,
+              'methods()','------------------',
+              'all()','returns object without request params',
+              'get()','Returns json result without iterating',
+              '__iter__()','Class can be iterated to return results']    
+        
+        print(utils.display_class(self,pv))
+
 
 
 class Works(Endpoint):
+    
+    """
+    
+    https://api.crossref.org/swagger-ui/index.html#/Works
+    
+    Implements
+    ----------
+    /works/{doi} => doi
+    /works => query
+    /works/{doi}/agency
+    
+    """
 
     CURSOR_AS_ITER_METHOD = True
 
@@ -360,6 +636,30 @@ class Works(Endpoint):
         'submitted',
         'updated'
     )
+    
+    #TODO: It would be great to add a test that verifies this list
+    #is up to date.
+    """
+    query.affiliation - query contributor affiliations
+    query.author - query author given and family names
+    query.bibliographic - query bibliographic information, useful for citation look up, includes titles, authors, ISSNs and publication years
+    query.chair - query chair given and family names
+    query.container-title - query container title aka. publication name
+    query.contributor - query author, editor, chair and translator given and family names
+    query.degree - query degree
+    query.editor - query editor given and family names
+    query.event-acronym - query acronym of the event
+    query.event-location - query location of the event
+    query.event-name - query name of the event
+    query.event-sponsor - query sponsor of the event
+    query.event-theme - query theme of the event
+    query.funder-name - query name of the funder
+    query.publisher-location - query location of the publisher
+    query.publisher-name - query publisher name
+    query.standards-body-acronym - query acronym of the standards body
+    query.standards-body-name - query standards body name
+    query.translator - query translator given and family names
+    """
 
     FIELDS_QUERY = (
         'affiliation',
@@ -368,6 +668,7 @@ class Works(Endpoint):
         'chair',
         'container_title',
         'contributor',
+        'degree',
         'editor',
         'event_acronym',
         'event_location',
@@ -377,6 +678,8 @@ class Works(Endpoint):
         'funder_name',
         'publisher_location',
         'publisher_name',
+        'standards_body_acronym',
+        'standards_body_name',
         'translator'
     )
 
@@ -540,6 +843,32 @@ class Works(Endpoint):
         'type-name': None,
         'update-type': None
     }
+    
+    def rows(self,rows):
+        
+        context = str(self.context)
+        request_url = build_url_endpoint(self.ENDPOINT, context)
+        request_params = dict(self.request_params)
+        
+        #TODO: rows check
+        
+        request_params['rows'] = rows
+        
+        
+        
+        return self._create_copy(self, request_url, request_params)
+    
+    def offset(self,offset):
+        
+        context = str(self.context)
+        request_url = build_url_endpoint(self.ENDPOINT, context)
+        request_params = dict(self.request_params)
+        
+        #TODO: offset check
+        
+        request_params['offset'] = offset
+        
+        return self._create_copy(self, request_url, request_params)
 
     def order(self, order='asc'):
         """
@@ -587,15 +916,12 @@ class Works(Endpoint):
 
         if order not in self.ORDER_VALUES:
             raise UrlSyntaxError(
-                'Sort order specified as %s but must be one of: %s' % (
-                    str(order),
-                    ', '.join(self.ORDER_VALUES)
-                )
-            )
+                'Sort order specified as %s but must be one of: %s' % 
+                    (str(order), ', '.join(self.ORDER_VALUES)))
 
         request_params['order'] = order
-
-        return self.__class__(request_url=request_url, request_params=request_params, context=context, etiquette=self.etiquette, timeout=self.timeout)
+    
+        return self._create_copy(self, request_url, request_params)
 
     def select(self, *args):
         """
@@ -689,7 +1015,7 @@ class Works(Endpoint):
             sorted([i for i in set(request_params.get('select', '').split(',') + select_args) if i])
         )
 
-        return self.__class__(request_url=request_url, request_params=request_params, context=context, etiquette=self.etiquette, timeout=self.timeout)
+        return self._create_copy(self, request_url, request_params)
 
     def sort(self, sort='score'):
         """
@@ -745,7 +1071,7 @@ class Works(Endpoint):
 
         request_params['sort'] = sort
 
-        return self.__class__(request_url=request_url, request_params=request_params, context=context, etiquette=self.etiquette, timeout=self.timeout)
+        return self._create_copy(self, request_url, request_params)
 
     def filter(self, **kwargs):
         """
@@ -793,23 +1119,58 @@ class Works(Endpoint):
             else:
                 request_params['filter'] += ',' + decoded_fltr + ':' + str(value)
 
-        return self.__class__(request_url=request_url, request_params=request_params, context=context, etiquette=self.etiquette, timeout=self.timeout)
+        return self._create_copy(self, request_url, request_params)
 
     def facet(self, facet_name, facet_count=100):
+        """
+        
+        
+        
+
+        Parameters
+        ----------
+        facet_name : TYPE
+            DESCRIPTION.
+        facet_count : TYPE, optional
+            DESCRIPTION. The default is 100.
+
+        Raises
+        ------
+        UrlSyntaxError
+            DESCRIPTION.
+
+        Returns
+        -------
+        TYPE
+            DESCRIPTION.
+
+        Improvements
+        ------------
+        1) does the API support multiple facets???? - not currently but it could
+        2) This design seems to break from the others in not taking kwargs -
+        presumably because only o
+
+        """
         context = str(self.context)
         request_url = build_url_endpoint(self.ENDPOINT, context)
         request_params = dict(self.request_params)
         request_params['rows'] = 0
 
         if facet_name not in self.FACET_VALUES.keys():
-            raise UrlSyntaxError('Facet %s specified but there is no such facet for this route. Valid facets for this route are: *, affiliation, funder-name, funder-doi, publisher-name, orcid, container-title, assertion, archive, update-type, issn, published, source, type-name, license, category-name, relation-type, assertion-group' %
+            facet_keys = self.FACET_VALUES.keys()
+            raise UrlSyntaxError(
+                'Facet %s specified but there is no such facet for this route. Valid facets for this route are: %s' % 
                     str(facet_name),
-                    ', '.join(self.FACET_VALUES.keys())
+                    ', '.join(facet_keys)
                 )
 
-        facet_count = self.FACET_VALUES[facet_name] if self.FACET_VALUES[facet_name] is not None and self.FACET_VALUES[facet_name] <= facet_count else facet_count
+        #TODO: Yikes
+        facet_count = self.FACET_VALUES[facet_name] if self.FACET_VALUES[facet_name] is not None\
+            and self.FACET_VALUES[facet_name] <= facet_count else facet_count
 
         request_params['facet'] = '%s:%s' % (facet_name, facet_count)
+        
+        #TODO: Yikes, didn't realize this makes a request
         result = self.do_http_request(
             'get',
             request_url,
@@ -818,6 +1179,8 @@ class Works(Endpoint):
             timeout=self.timeout
         ).json()
 
+        #This gets returns in addition to a message ... which is presumably
+        #why this is terminal, because everywhere else we are assuming items
         return result['message']['facets']
 
     def query(self, *args, **kwargs):
@@ -862,24 +1225,34 @@ class Works(Endpoint):
 
         for field, value in kwargs.items():
             if field not in self.FIELDS_QUERY:
-                raise UrlSyntaxError(
-                    'Field query %s specified but there is no such field query for this route. Valid field queries for this route are: %s' % (
-                        str(field), ', '.join(self.FIELDS_QUERY)
+                if field == 'title':
+                    raise UrlSyntaxError('title deprecated, use bibliographic instead, see https://status.crossref.org/incidents/4y45gj63jsp4')
+                else:
+                    raise UrlSyntaxError(
+                        'Field query %s specified but there is no such field query for this route. Valid field queries for this route are: %s' % (
+                            str(field), ', '.join(self.FIELDS_QUERY)
+                        )
                     )
-                )
             request_params['query.%s' % field.replace('_', '-')] = value
 
-        return self.__class__(request_url, request_params, context, self.etiquette)
+        return self._create_copy(self, request_url, request_params)
 
     def sample(self, sample_size=20):
         """
+        Return a random sampling of the results
+        
         This method retrieve an iterable object that implements the method
         __iter__. The arguments given will compose the parameters in the
         request url.
+        
+        Parameters
+        ----------
+        sample_size : int, default 20
+            value between 1 and 100
 
-        kwargs: sample_size (Integer) between 0 and 100.
-
-        return: iterable object of Works metadata
+        Returns
+        -------
+        iterable object of Works metadata
 
         Example:
             >>> from crossref.restful import Works
@@ -890,6 +1263,7 @@ class Works(Endpoint):
             [['A study on the hemolytic properties ofPrevotella nigrescens'],
             ['The geometry and the radial breathing mode of carbon nanotubes: beyond the ideal behaviour']]
         """
+        
         context = str(self.context)
         request_url = build_url_endpoint(self.ENDPOINT, context)
         request_params = dict(self.request_params)
@@ -906,7 +1280,7 @@ class Works(Endpoint):
 
         request_params['sample'] = sample_size
 
-        return self.__class__(request_url=request_url, request_params=request_params, context=context, etiquette=self.etiquette, timeout=self.timeout)
+        return self._create_copy(self, request_url, request_params)
 
     def doi(self, doi, only_message=True):
         """
@@ -971,10 +1345,21 @@ class Works(Endpoint):
         """
         This method retrieve the DOI Agency metadata related to a given DOI
         number.
+        
+        Parameters
+        ----------
+        doi : string
+        only_message : default True
+            If true, only the message field of the result is returned, otherwise
+            the entire result is returned.
 
-        args: Crossref DOI id (String)
-
+        Returns
+        -------
         return: JSON
+        
+        Implements
+        ----------
+        https://api.crossref.org/swagger-ui/index.html#/Works/get_works__doi__agency
 
         Example:
             >>> from crossref.restful import Works
@@ -1041,6 +1426,83 @@ class Works(Endpoint):
             return False
 
         return True
+    
+    
+    def examples(self,example_type=None):
+        
+        #TODO: Finish this
+        
+        if example_type is None:
+            print("Works().examples('agency')")
+            print("Works().examples('doi')")
+            print("Works().examples('query')")
+            print("Works().examples('order')")
+            print("Works().examples('select')")
+            print("Works().examples('sort')")
+            print("Works().examples('filter')")
+            print("Works().examples('facet')")
+            print("Works().examples('sample')")
+
+            
+            pass
+        if example_type == 'agency':
+            pass
+        elif example_type == 'doi':
+            print("result = Works().doi('10.1002/biot.201400046')")
+        elif example_type == 'query':
+            print("w = Works().query('Zika virus')")
+            print("The search statement can be followed by keywords")
+            print("to further refine the query. See Works.FIELDS_QUERY")
+            print("for the list.")
+            print("w = Works().query('electrical stimulation',affiliation='Duke').rows(5)")
+            print("You can also omit the initial search")
+            print("w = Works().query(author='Hokanson',title='Bladder').rows(5)")
+            #['affiliation', 'author', 'bibliographic', 'chair', 'container_title', 'contributor', 'editor', 'event_acronym', 'event_location', 'event_name', 'event_sponsor', 'event_theme', 'funder_name', 'publisher_location', 'publisher_name', 'translator']
+            pass
+        elif example_type == 'order':
+            print("w = Works().query('Zika virus')")
+            pass
+        elif example_type == 'select':
+            #['DOI', 'ISBN', 'ISSN', 'URL', 'abstract', 'accepted', 'alternative-id', 'approved', 'archive', 'article-number', 'assertion', 'author', 'chair', 'clinical-trial-number', 'container-title', 'content-created', 'content-domain', 'created', 'degree', 'deposited', 'editor', 'event', 'funder', 'group-title', 'indexed', 'is-referenced-by-count', 'issn-type', 'issue', 'issued', 'license', 'link', 'member', 'original-title', 'page', 'posted', 'prefix', 'published-online', 'published-print', 'publisher', 'publisher-location', 'reference', 'references-count', 'relation', 'score', 'short-container-title', 'short-title', 'standards-body', 'subject', 'subtitle', 'title', 'translator', 'type', 'update-policy', 'update-to', 'updated-by', 'volume']
+
+            pass
+        elif example_type == 'sort':
+            pass
+        elif example_type == 'filter':
+            pass
+        elif example_type == 'facet':
+            pass
+        elif example_type == 'sample':
+            pass
+    
+    def __repr__(self):
+
+        pv = ['CURSOR_AS_ITER_METHOD',self.CURSOR_AS_ITER_METHOD,
+              'ENDPOINT',quotes(self.ENDPOINT),
+              'FACET_VALUES',td(str(self.FACET_VALUES)),
+              'FIELDS_QUERY',td(str(self.FIELDS_QUERY)),
+              'FIELDS_SELECT',td(str(self.FIELDS_SELECT)),
+              'FILTER_VALIDATOR',td(str(self.FILTER_VALIDATOR)),
+              'ORDER_VALUES',td(str(self.ORDER_VALUES)),
+              'SORT_VALUES',td(str(self.SORT_VALUES)),
+              'methods()','----------------------',
+              'agency()','Get agency info for DOI',
+              'count()','Returns # of results',
+              'doi()','Get info for DOI',
+              'query()','Get works based on query',
+              'query-modifiers','-------------',
+              'order()','how to order results',
+              'select()','which fields to return',
+              'sort()','how to sort results',
+              'filter()','',
+              'facet()','counts facets',
+              'sample(n)','randomly samples from response',
+              '--others--','------------------------',
+              'display_endpoint()','displays endpoint props',
+              'examples()','Displays calling examples'
+              ]    
+        
+        return utils.display_class(self,pv) 
 
 
 class Funders(Endpoint):
@@ -1129,7 +1591,11 @@ class Funders(Endpoint):
             else:
                 request_params['filter'] += ',' + decoded_fltr + ':' + str(value)
 
-        return self.__class__(request_url=request_url, request_params=request_params, context=context, etiquette=self.etiquette, timeout=self.timeout)
+        return self.__class__(request_url=request_url, 
+                              request_params=request_params, 
+                              context=context, 
+                              etiquette=self.etiquette, 
+                              timeout=self.timeout)
 
     def funder(self, funder_id, only_message=True):
         """funder
